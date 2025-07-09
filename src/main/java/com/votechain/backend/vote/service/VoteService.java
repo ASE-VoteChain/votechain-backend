@@ -89,13 +89,12 @@ public class VoteService {
             throw new IllegalStateException(errorMsg);
         }
 
-        // Validate option exists
-        VotacionOpcion opcion = opcionRepository.findById(request.getOpcionId())
-                .orElseThrow(() -> new EntityNotFoundException("Option not found with id: " + request.getOpcionId()));
+        // Validate option exists and belongs to the voting
+        // ✅ CAMBIO: Buscar opción por votacionId y orden (ID público) en lugar de por ID de BD
+        VotacionOpcion opcion = opcionRepository.findByVotacionIdAndOrden(request.getVotacionId(), request.getOpcionId().intValue())
+                .orElseThrow(() -> new EntityNotFoundException("Option with order " + request.getOpcionId() + " not found in voting " + request.getVotacionId()));
 
-        if (!opcion.getVotacion().getId().equals(votacion.getId())) {
-            throw new IllegalArgumentException("Option does not belong to this voting");
-        }
+        // Ya no necesitamos validar que la opción pertenece a la votación porque ya la buscamos por votacionId
 
         // Check if user already voted
         if (voteRepository.existsByVotacionIdAndUserId(votacion.getId(), userId)) {
@@ -177,13 +176,12 @@ public class VoteService {
             throw new IllegalStateException("Voting is not currently active");
         }
 
-        // Validate option exists
-        VotacionOpcion opcion = opcionRepository.findById(request.getOpcionId())
-                .orElseThrow(() -> new EntityNotFoundException("Option not found with id: " + request.getOpcionId()));
+        // Validate option exists and belongs to the voting
+        // ✅ CAMBIO: Buscar opción por votacionId y orden (ID público) en lugar de por ID de BD
+        VotacionOpcion opcion = opcionRepository.findByVotacionIdAndOrden(request.getVotacionId(), request.getOpcionId().intValue())
+                .orElseThrow(() -> new EntityNotFoundException("Option with order " + request.getOpcionId() + " not found in voting " + request.getVotacionId()));
 
-        if (!opcion.getVotacion().getId().equals(votacion.getId())) {
-            throw new IllegalArgumentException("Option does not belong to this voting");
-        }
+        // Ya no necesitamos validar que la opción pertenece a la votación porque ya la buscamos por votacionId
 
         // 🔒 VERIFICACIÓN ROBUSTA DE DUPLICADOS
         log.info("🔍 Realizando verificación robusta de votos duplicados...");

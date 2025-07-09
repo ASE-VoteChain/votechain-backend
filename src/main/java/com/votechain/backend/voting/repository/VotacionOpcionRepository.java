@@ -7,14 +7,21 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface VotacionOpcionRepository extends JpaRepository<VotacionOpcion, Long> {
 
     List<VotacionOpcion> findByVotacionIdOrderByOrden(Long votacionId);
 
+    // ✅ AGREGAR: Método básico para buscar opciones por ID de votación
+    List<VotacionOpcion> findByVotacionId(Long votacionId);
+
     @Query("SELECT o FROM VotacionOpcion o WHERE o.votacion.id = :votacionId")
     List<VotacionOpcion> getOpcionesByVotacionId(@Param("votacionId") Long votacionId);
+
+    // ✅ AGREGAR: Buscar opción por votación y orden específico
+    Optional<VotacionOpcion> findByVotacionIdAndOrden(Long votacionId, Integer orden);
 
     void deleteByVotacionId(Long votacionId);
 

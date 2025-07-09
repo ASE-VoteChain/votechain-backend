@@ -98,11 +98,11 @@ public class BlockchainService {
                     vote.setVoteHash(createVoteHash(vote));
                 }
 
-                // Send the vote to the blockchain
+                // Send the vote to the blockchain using the logical option order, not DB ID
                 TransactionReceipt receipt = voteChainContract.castVote(
                         BigInteger.valueOf(vote.getVotacion().getId()),
                         BigInteger.valueOf(vote.getUser().getId()),
-                        BigInteger.valueOf(vote.getOpcionSeleccionada().getId()),
+                        BigInteger.valueOf(vote.getOpcionSeleccionada().getOrden()), // ✅ USAR ORDEN en lugar de ID
                         vote.getVoteHash()
                 ).send();
 

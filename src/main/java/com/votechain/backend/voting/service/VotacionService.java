@@ -10,6 +10,7 @@ import com.votechain.backend.voting.repository.VotacionOpcionRepository;
 import com.votechain.backend.voting.repository.VotacionRepository;
 import com.votechain.backend.common.logging.SystemLogService;
 import com.votechain.backend.voting.model.*;
+import com.votechain.backend.vote.repository.VoteRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +46,9 @@ public class VotacionService {
 
     @Autowired
     private BlockchainService blockchainService;
+
+    @Autowired
+    private VoteRepository voteRepository;
 
     /**
      * Get public votaciones with pagination and filtering
@@ -526,28 +530,46 @@ public class VotacionService {
             throw new IllegalStateException("Solo se pueden finalizar votaciones abiertas. Estado actual: " + votacion.getEstado());
         }
 
-        // 📊 CALCULAR RESULTADOS FINALES
+        // 📊 CALCULAR RESULTADOS FINALES DETALLADOS
         Map<String, Long> distribucion = getVoteDistributionByOption(id);
+        List<VotacionOpcion> opciones = opcionRepository.findByVotacionId(id);
 
-        // Encontrar ganador
-        String opcionGanadora = distribucion.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse("No hay votos");
-
-        Long votosGanadora = distribucion.values().stream()
-                .max(Long::compareTo)
-                .orElse(0L);
-
+        // Calcular estadísticas detalladas
         long totalVotos = distribucion.values().stream()
                 .mapToLong(Long::longValue)
                 .sum();
 
-        log.info("📊 Resultados calculados: Ganador={} con {} votos de {} totales",
-                opcionGanadora, votosGanadora, totalVotos);
+        // Encontrar ganador(es) - puede haber empate
+        Long maxVotos = distribucion.values().stream()
+                .max(Long::compareTo)
+                .orElse(0L);
+
+        List<String> ganadoras = distribucion.entrySet().stream()
+                .filter(entry -> entry.getValue().equals(maxVotos))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
+
+        String opcionGanadora = ganadoras.size() == 1 ? ganadoras.get(0) :
+                "Empate entre: " + String.join(", ", ganadoras);
+
+        // Calcular porcentajes
+        Map<String, Double> porcentajes = new HashMap<>();
+        distribucion.forEach((opcion, votos) -> {
+            double porcentaje = totalVotos > 0 ? (votos * 100.0) / totalVotos : 0.0;
+            porcentajes.put(opcion, Math.round(porcentaje * 100.0) / 100.0); // Redondear a 2 decimales
+        });
+
+        // Estadísticas adicionales
+        double participacionPromedio = totalVotos > 0 ? (double) totalVotos / opciones.size() : 0.0;
+        boolean hayEmpate = ganadoras.size() > 1;
+
+        log.info("📊 Resultados calculados: Ganador(es)={} con {} votos de {} totales ({}%)",
+                opcionGanadora, maxVotos, totalVotos,
+                totalVotos > 0 ? String.format("%.2f", (maxVotos * 100.0) / totalVotos) : "0");
 
         // 🔗 FINALIZAR EN BLOCKCHAIN
         String finalizeHash = null;
+        boolean blockchainSuccess = false;
         try {
             if (votacion.getBlockchainVotingId() != null) {
                 log.info("🔗 Finalizando votación en blockchain...");
@@ -555,6 +577,7 @@ public class VotacionService {
                         .get(30, TimeUnit.SECONDS);
 
                 votacion.setBlockchainFinalizeHash(finalizeHash);
+                blockchainSuccess = true;
                 log.info("✅ Votación {} finalizada en blockchain con hash: {}", id, finalizeHash);
             } else {
                 log.warn("⚠️ Votación {} no tiene ID de blockchain, finalizando solo en BD", id);
@@ -569,29 +592,56 @@ public class VotacionService {
         votacion.setEstado(VotacionEstado.CERRADA);
         votacion.setFechaFinalizacion(fechaFinalizacion);
         votacion.setResultadoFinal(opcionGanadora);
-        votacion.setVotosGanadora(votosGanadora);
+        votacion.setVotosGanadora(maxVotos);
 
         Votacion saved = votacionRepository.save(votacion);
 
         // Log de la acción
         systemLogService.logAdminAction(userId, "Finalize Votacion",
-                String.format("Finalized votacion: %s. Winner: %s with %d votes",
-                        saved.getTitulo(), opcionGanadora, votosGanadora));
+                String.format("Finalized votacion: %s. Winner: %s with %d votes of %d total votes",
+                        saved.getTitulo(), opcionGanadora, maxVotos, totalVotos));
 
-        // 📊 CONSTRUIR RESPUESTA COMPLETA CON RESULTADOS
+        // 📊 CONSTRUIR RESPUESTA COMPLETA CON RESULTADOS DETALLADOS
         Map<String, Object> response = new HashMap<>();
         response.put("votacion", convertToDto(saved));
-        response.put("resultados", Map.of(
-                "ganador", opcionGanadora,
-                "votosGanadora", votosGanadora,
-                "distribucionCompleta", distribucion,
-                "totalVotos", totalVotos,
-                "fechaFinalizacion", fechaFinalizacion,
-                "blockchainFinalizeHash", finalizeHash
-        ));
 
-        log.info("🏆 Votación {} finalizada exitosamente. Ganador: {} con {} votos de {} totales",
-                id, opcionGanadora, votosGanadora, totalVotos);
+        // Resultados detallados
+        Map<String, Object> resultados = new HashMap<>();
+        resultados.put("ganador", opcionGanadora);
+        resultados.put("votosGanadora", maxVotos);
+        resultados.put("hayEmpate", hayEmpate);
+        resultados.put("ganadoras", ganadoras);
+        resultados.put("distribucionVotos", distribucion);
+        resultados.put("distribucionPorcentajes", porcentajes);
+        resultados.put("totalVotos", totalVotos);
+        resultados.put("totalOpciones", opciones.size());
+        resultados.put("participacionPromedio", Math.round(participacionPromedio * 100.0) / 100.0);
+        resultados.put("fechaFinalizacion", fechaFinalizacion);
+
+        // Información blockchain
+        Map<String, Object> blockchain = new HashMap<>();
+        blockchain.put("finalizeHash", finalizeHash);
+        blockchain.put("blockchainSuccess", blockchainSuccess);
+        blockchain.put("blockchainVotingId", votacion.getBlockchainVotingId());
+        blockchain.put("verified", votacion.isBlockchainVerified());
+        resultados.put("blockchain", blockchain);
+
+        // Duración de la votación
+        if (votacion.getFechaInicio() != null) {
+            long duracionHoras = java.time.Duration.between(votacion.getFechaInicio(), fechaFinalizacion).toHours();
+            resultados.put("duracionHoras", duracionHoras);
+        }
+
+        response.put("resultados", resultados);
+        response.put("success", true);
+        response.put("message", hayEmpate ?
+                "Votación finalizada con empate entre " + ganadoras.size() + " opciones" :
+                "Votación finalizada exitosamente");
+
+        log.info("🏆 Votación {} finalizada exitosamente. Ganador: {} con {} votos de {} totales ({}% participación)",
+                id, opcionGanadora, maxVotos, totalVotos,
+                totalVotos > 0 && opciones.size() > 0 ?
+                String.format("%.1f", (totalVotos * 100.0) / opciones.size()) : "N/A");
 
         return response;
     }
@@ -700,15 +750,34 @@ public class VotacionService {
     public VotacionDto convertToDto(Votacion votacion) {
         List<VotacionOpcion> opciones = opcionRepository.findByVotacionIdOrderByOrden(votacion.getId());
 
+        // Calcular el total de votos de la votación
+        long totalVotosVotacion = voteRepository.countByVotacionId(votacion.getId());
+
         List<VotacionOpcionDto> opcionesDto = opciones.stream()
-                .map(opcion -> VotacionOpcionDto.builder()
-                        .id((long) opcion.getOrden()) // ✅ CORREGIDO: Usar el orden como ID visible
-                        .votacionId(opcion.getVotacion().getId())
-                        .titulo(opcion.getTitulo())
-                        .descripcion(opcion.getDescripcion())
-                        .imagen(opcion.getImagen())
-                        .orden(opcion.getOrden())
-                        .build())
+                .map(opcion -> {
+                    // Contar votos por esta opción específica
+                    long votosOpcion = voteRepository.countByVotacionIdAndOpcionSeleccionadaId(
+                        votacion.getId(), opcion.getId());
+
+                    // Calcular porcentaje
+                    Double porcentaje = null;
+                    if (totalVotosVotacion > 0) {
+                        porcentaje = (double) votosOpcion / totalVotosVotacion * 100.0;
+                        // Redondear a 2 decimales
+                        porcentaje = Math.round(porcentaje * 100.0) / 100.0;
+                    }
+
+                    return VotacionOpcionDto.builder()
+                            .id((long) opcion.getOrden()) // ✅ USAR ORDEN como ID público (1, 2, 3...)
+                            .votacionId(opcion.getVotacion().getId())
+                            .titulo(opcion.getTitulo())
+                            .descripcion(opcion.getDescripcion())
+                            .imagen(opcion.getImagen())
+                            .orden(opcion.getOrden())
+                            .totalVotos((int) votosOpcion) // Agregar total de votos
+                            .porcentaje(porcentaje) // Agregar porcentaje
+                            .build();
+                })
                 .collect(Collectors.toList());
 
         return VotacionDto.builder()
@@ -726,7 +795,7 @@ public class VotacionService {
                 .creadorId(votacion.getCreador().getId())
                 .creadorNombre(votacion.getCreador().getFullName())
                 .opciones(opcionesDto)
-                .totalVotos(votacion.getVotos() != null ? votacion.getVotos().size() : 0)
+                .totalVotos((int) totalVotosVotacion) // Usar el total calculado correctamente
                 .blockchainTransactionHash(votacion.getBlockchainTransactionHash())
                 .createdAt(votacion.getCreatedAt())
                 .updatedAt(votacion.getUpdatedAt())
@@ -741,9 +810,9 @@ public class VotacionService {
         Map<String, Long> distribution = new HashMap<>();
 
         for (VotacionOpcion opcion : opciones) {
-            // Este método aún no existe en VoteRepository, lo implementaremos como 0 por ahora
-            // En una implementación real, necesitaríamos el VoteRepository
-            distribution.put(opcion.getTitulo(), 0L);
+            // Usar el VoteRepository para contar los votos reales por opción
+            long voteCount = voteRepository.countByVotacionIdAndOpcionSeleccionadaId(votacionId, opcion.getId());
+            distribution.put(opcion.getTitulo(), voteCount);
         }
 
         return distribution;

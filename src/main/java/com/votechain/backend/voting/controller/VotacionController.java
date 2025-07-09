@@ -761,29 +761,50 @@ public class VotacionController {
     }
 
     /**
-     * Finalize a votacion (change from ABIERTA to CERRADA)
+     * Finalizar una votación - permite al creador o admin finalizar su votación
      */
     @Operation(
         summary = "Finalizar una votación",
-        description = "Permite a un administrador finalizar una votación activa y obtener los resultados finales",
-        tags = { "Votaciones", "Administración", "Estados" }
+        description = "Permite al creador de la votación o a un administrador finalizar una votación abierta. " +
+                     "Calcula automáticamente los resultados finales, determina el ganador, y muestra estadísticas detalladas " +
+                     "incluyendo distribución de votos, porcentajes, y datos de blockchain si aplica.",
+        tags = { "Votaciones", "Gestión de Estado" }
     )
     @SecurityRequirement(name = "bearer-jwt")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Votación finalizada correctamente con resultados"),
-        @ApiResponse(responseCode = "400", description = "La votación no puede ser finalizada"),
+        @ApiResponse(responseCode = "200", description = "Votación finalizada correctamente con resultados completos"),
+        @ApiResponse(responseCode = "400", description = "La votación no puede ser finalizada (no está abierta)"),
         @ApiResponse(responseCode = "401", description = "No autorizado"),
-        @ApiResponse(responseCode = "403", description = "Acceso prohibido"),
+        @ApiResponse(responseCode = "403", description = "Acceso prohibido - solo el creador o un administrador pueden finalizar la votación"),
         @ApiResponse(responseCode = "404", description = "Votación no encontrada")
     })
     @PostMapping("/votaciones/{id}/finalizar")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasRole('USER') or hasRole('ADMIN')")
     public ResponseEntity<?> finalizarVotacion(
             @Parameter(description = "ID de la votación", required = true) @PathVariable Long id,
             @AuthenticationPrincipal UserDetailsImpl userDetails) {
         try {
+            // Verificar permisos: debe ser el creador o un admin
+            User user = userRepository.findById(userDetails.getId())
+                .orElseThrow(() -> new EntityNotFoundException("Usuario no encontrado"));
+
+            Votacion votacion = votacionRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Votación no encontrada"));
+
+            if (!permissionService.canFinalizeVotacion(user, votacion)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "No tienes permisos para finalizar esta votación. Solo el creador o un administrador pueden finalizarla."));
+            }
+
+            // Finalizar la votación y obtener resultados completos
             Map<String, Object> resultado = votacionService.finalizarVotacion(id, userDetails.getId());
-            return ResponseEntity.ok(resultado);
+
+            // Enriquecer la respuesta con estadísticas adicionales
+            Map<String, Object> respuestaCompleta = enriquecerResultadosFinalizacion(resultado, id);
+
+            log.info("✅ Votación {} finalizada exitosamente por usuario {}", id, userDetails.getId());
+            return ResponseEntity.ok(respuestaCompleta);
+
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", e.getMessage()));
@@ -797,30 +818,42 @@ public class VotacionController {
     }
 
     /**
-     * Suspend a votacion temporarily
+     * Suspend a votacion temporarily - permite al creador o admin suspender su votación
      */
     @Operation(
         summary = "Suspender una votación",
-        description = "Permite a un administrador suspender temporalmente una votación activa",
-        tags = { "Votaciones", "Administración", "Estados" }
+        description = "Permite al creador de la votación o a un administrador suspender temporalmente una votación activa",
+        tags = { "Votaciones", "Gestión de Estado" }
     )
     @SecurityRequirement(name = "bearer-jwt")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Votación suspendida correctamente"),
-        @ApiResponse(responseCode = "400", description = "La votación no puede ser suspendida"),
+        @ApiResponse(responseCode = "400", description = "La votación no puede ser suspendida (no está abierta)"),
         @ApiResponse(responseCode = "401", description = "No autorizado"),
-        @ApiResponse(responseCode = "403", description = "Acceso prohibido"),
+        @ApiResponse(responseCode = "403", description = "Acceso prohibido - solo el creador o un administrador pueden suspender la votación"),
         @ApiResponse(responseCode = "404", description = "Votación no encontrada")
     })
     @PostMapping("/votaciones/{id}/suspender")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasRole('USER') or hasRole('ADMIN')")
     public ResponseEntity<?> suspenderVotacion(
             @Parameter(description = "ID de la votación", required = true) @PathVariable Long id,
             @Parameter(description = "Motivo de la suspensión") @RequestParam(required = false) String motivo,
             @AuthenticationPrincipal UserDetailsImpl userDetails) {
         try {
-            VotacionDto votacion = votacionService.suspenderVotacion(id, userDetails.getId(), motivo);
-            return ResponseEntity.ok(votacion);
+            // Verificar permisos: debe ser el creador o un admin
+            User user = userRepository.findById(userDetails.getId())
+                .orElseThrow(() -> new EntityNotFoundException("Usuario no encontrado"));
+
+            Votacion votacion = votacionRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Votación no encontrada"));
+
+            if (!permissionService.canSuspendVotacion(user, votacion)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "No tienes permisos para suspender esta votación. Solo el creador o un administrador pueden suspenderla."));
+            }
+
+            VotacionDto votacionSuspendida = votacionService.suspenderVotacion(id, userDetails.getId(), motivo);
+            return ResponseEntity.ok(votacionSuspendida);
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", e.getMessage()));
@@ -834,29 +867,41 @@ public class VotacionController {
     }
 
     /**
-     * Resume a suspended votacion
+     * Resume a suspended votacion - permite al creador o admin reanudar su votación
      */
     @Operation(
         summary = "Reanudar una votación suspendida",
-        description = "Permite a un administrador reanudar una votación que fue suspendida",
-        tags = { "Votaciones", "Administración", "Estados" }
+        description = "Permite al creador de la votación o a un administrador reanudar una votación que fue suspendida",
+        tags = { "Votaciones", "Gestión de Estado" }
     )
     @SecurityRequirement(name = "bearer-jwt")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Votación reanudada correctamente"),
-        @ApiResponse(responseCode = "400", description = "La votación no puede ser reanudada"),
+        @ApiResponse(responseCode = "400", description = "La votación no puede ser reanudada (no está suspendida o expiró)"),
         @ApiResponse(responseCode = "401", description = "No autorizado"),
-        @ApiResponse(responseCode = "403", description = "Acceso prohibido"),
+        @ApiResponse(responseCode = "403", description = "Acceso prohibido - solo el creador o un administrador pueden reanudar la votación"),
         @ApiResponse(responseCode = "404", description = "Votación no encontrada")
     })
     @PostMapping("/votaciones/{id}/reanudar")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasRole('USER') or hasRole('ADMIN')")
     public ResponseEntity<?> reanudarVotacion(
             @Parameter(description = "ID de la votación", required = true) @PathVariable Long id,
             @AuthenticationPrincipal UserDetailsImpl userDetails) {
         try {
-            VotacionDto votacion = votacionService.reanudarVotacion(id, userDetails.getId());
-            return ResponseEntity.ok(votacion);
+            // Verificar permisos: debe ser el creador o un admin
+            User user = userRepository.findById(userDetails.getId())
+                .orElseThrow(() -> new EntityNotFoundException("Usuario no encontrado"));
+
+            Votacion votacion = votacionRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Votación no encontrada"));
+
+            if (!permissionService.canResumeVotacion(user, votacion)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "No tienes permisos para reanudar esta votación. Solo el creador o un administrador pueden reanudarla."));
+            }
+
+            VotacionDto votacionReanudada = votacionService.reanudarVotacion(id, userDetails.getId());
+            return ResponseEntity.ok(votacionReanudada);
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", e.getMessage()));
@@ -870,30 +915,42 @@ public class VotacionController {
     }
 
     /**
-     * Cancel a votacion permanently
+     * Cancel a votacion permanently - permite al creador o admin cancelar su votación
      */
     @Operation(
         summary = "Cancelar una votación",
-        description = "Permite a un administrador cancelar permanentemente una votación",
-        tags = { "Votaciones", "Administración", "Estados" }
+        description = "Permite al creador de la votación o a un administrador cancelar permanentemente una votación",
+        tags = { "Votaciones", "Gestión de Estado" }
     )
     @SecurityRequirement(name = "bearer-jwt")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Votación cancelada correctamente"),
-        @ApiResponse(responseCode = "400", description = "La votación no puede ser cancelada"),
+        @ApiResponse(responseCode = "400", description = "La votación no puede ser cancelada (ya está finalizada)"),
         @ApiResponse(responseCode = "401", description = "No autorizado"),
-        @ApiResponse(responseCode = "403", description = "Acceso prohibido"),
+        @ApiResponse(responseCode = "403", description = "Acceso prohibido - solo el creador o un administrador pueden cancelar la votación"),
         @ApiResponse(responseCode = "404", description = "Votación no encontrada")
     })
     @PostMapping("/votaciones/{id}/cancelar")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasRole('USER') or hasRole('ADMIN')")
     public ResponseEntity<?> cancelarVotacion(
             @Parameter(description = "ID de la votación", required = true) @PathVariable Long id,
             @Parameter(description = "Motivo de la cancelación") @RequestParam(required = false) String motivo,
             @AuthenticationPrincipal UserDetailsImpl userDetails) {
         try {
-            VotacionDto votacion = votacionService.cancelarVotacion(id, userDetails.getId(), motivo);
-            return ResponseEntity.ok(votacion);
+            // Verificar permisos: debe ser el creador o un admin
+            User user = userRepository.findById(userDetails.getId())
+                .orElseThrow(() -> new EntityNotFoundException("Usuario no encontrado"));
+
+            Votacion votacion = votacionRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Votación no encontrada"));
+
+            if (!permissionService.canCancelVotacion(user, votacion)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "No tienes permisos para cancelar esta votación. Solo el creador o un administrador pueden cancelarla."));
+            }
+
+            VotacionDto votacionCancelada = votacionService.cancelarVotacion(id, userDetails.getId(), motivo);
+            return ResponseEntity.ok(votacionCancelada);
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", e.getMessage()));
@@ -904,5 +961,120 @@ public class VotacionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Error cancelando votación: " + e.getMessage()));
         }
+    }
+
+    /**
+     * Enriquecer los resultados de finalización con estadísticas adicionales
+     */
+    private Map<String, Object> enriquecerResultadosFinalizacion(Map<String, Object> resultadoBase, Long votacionId) {
+        try {
+            // Copiar el resultado base
+            Map<String, Object> respuestaEnriquecida = new HashMap<>(resultadoBase);
+
+            // Obtener estadísticas adicionales
+            long totalVotos = voteService.countByVotacionId(votacionId);
+            long totalUsuariosElegibles = userRepository.count();
+
+            // 📊 ESTADÍSTICAS DE PARTICIPACIÓN
+            Map<String, Object> estadisticasParticipacion = new HashMap<>();
+            estadisticasParticipacion.put("totalVotos", totalVotos);
+            estadisticasParticipacion.put("totalUsuariosElegibles", totalUsuariosElegibles);
+            estadisticasParticipacion.put("participacionPorcentaje",
+                totalUsuariosElegibles > 0 ? (totalVotos * 100.0 / totalUsuariosElegibles) : 0.0);
+
+            // 📈 DISTRIBUCIÓN DETALLADA POR OPCIONES CON PORCENTAJES
+            Map<String, Long> distribucionOpciones = voteService.getVoteDistributionByOption(votacionId);
+            Map<String, Object> opcionesDetalladas = new HashMap<>();
+
+            distribucionOpciones.forEach((opcion, votos) -> {
+                Map<String, Object> detalleOpcion = new HashMap<>();
+                detalleOpcion.put("votos", votos);
+                detalleOpcion.put("porcentaje", totalVotos > 0 ?
+                    Math.round((votos * 100.0 / totalVotos) * 100.0) / 100.0 : 0.0);
+                opcionesDetalladas.put(opcion, detalleOpcion);
+            });
+
+            // ⏰ ESTADÍSTICAS TEMPORALES
+            Map<LocalDateTime, Long> tendenciaTemporal = voteService.getVotesOverTime(votacionId);
+
+            // 🔗 ESTADÍSTICAS BLOCKCHAIN
+            Map<String, Object> blockchainStats = voteService.getBlockchainStats(votacionId);
+
+            // 🏃‍♂️ ACTIVIDAD RECIENTE
+            List<Vote> ultimosVotos = voteRepository.findLatestVotesByVotacion(votacionId, PageRequest.of(0, 10));
+            List<Map<String, Object>> actividadReciente = ultimosVotos.stream()
+                .map(vote -> {
+                    Map<String, Object> voteInfo = new HashMap<>();
+                    voteInfo.put("timestamp", vote.getCreatedAt());
+                    voteInfo.put("voteHash", vote.getVoteHash().substring(0, 8) + "...");
+                    voteInfo.put("blockchainVerified", vote.isBlockchainVerified());
+                    voteInfo.put("status", vote.getStatus());
+                    return voteInfo;
+                })
+                .collect(Collectors.toList());
+
+            // 🎯 ANÁLISIS DEL GANADOR
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultados = (Map<String, Object>) resultadoBase.get("resultados");
+            String ganador = (String) resultados.get("ganador");
+            Long votosGanadora = (Long) resultados.get("votosGanadora");
+
+            Map<String, Object> analisisGanador = new HashMap<>();
+            analisisGanador.put("opcion", ganador);
+            analisisGanador.put("votos", votosGanadora);
+            analisisGanador.put("porcentaje", totalVotos > 0 ?
+                Math.round((votosGanadora * 100.0 / totalVotos) * 100.0) / 100.0 : 0.0);
+            analisisGanador.put("margenVictoria", calcularMargenVictoria(distribucionOpciones, ganador, votosGanadora));
+            analisisGanador.put("esVictoriaDefinitiva", esVictoriaDefinitiva(distribucionOpciones, votosGanadora, totalVotos));
+
+            // 📊 AGREGAR TODA LA INFORMACIÓN ENRIQUECIDA
+            respuestaEnriquecida.put("estadisticasParticipacion", estadisticasParticipacion);
+            respuestaEnriquecida.put("opcionesDetalladas", opcionesDetalladas);
+            respuestaEnriquecida.put("tendenciaTemporal", tendenciaTemporal);
+            respuestaEnriquecida.put("blockchain", blockchainStats);
+            respuestaEnriquecida.put("actividadReciente", actividadReciente);
+            respuestaEnriquecida.put("analisisGanador", analisisGanador);
+            respuestaEnriquecida.put("finalizadoEn", LocalDateTime.now());
+            respuestaEnriquecida.put("esVotacionFinalizada", true);
+
+            return respuestaEnriquecida;
+
+        } catch (Exception e) {
+            log.warn("⚠️ Error enriqueciendo resultados de finalización: {}", e.getMessage());
+            // Si hay error, devolver el resultado base sin enriquecimiento
+            return resultadoBase;
+        }
+    }
+
+    /**
+     * Calcular el margen de victoria respecto a la segunda opción más votada
+     */
+    private Map<String, Object> calcularMargenVictoria(Map<String, Long> distribucion, String ganador, Long votosGanadora) {
+        Map<String, Object> margen = new HashMap<>();
+
+        // Encontrar la segunda opción más votada
+        Long segundoLugar = distribucion.entrySet().stream()
+            .filter(entry -> !entry.getKey().equals(ganador))
+            .map(Map.Entry::getValue)
+            .max(Long::compareTo)
+            .orElse(0L);
+
+        long diferencia = votosGanadora - segundoLugar;
+        double porcentajeMargen = votosGanadora > 0 ? (diferencia * 100.0 / votosGanadora) : 0.0;
+
+        margen.put("votosSegundoLugar", segundoLugar);
+        margen.put("diferencia", diferencia);
+        margen.put("porcentajeMargen", Math.round(porcentajeMargen * 100.0) / 100.0);
+
+        return margen;
+    }
+
+    /**
+     * Determinar si la victoria es definitiva (más del 50% de los votos)
+     */
+    private boolean esVictoriaDefinitiva(Map<String, Long> distribucion, Long votosGanadora, long totalVotos) {
+        if (totalVotos == 0) return false;
+        double porcentajeGanadora = (votosGanadora * 100.0) / totalVotos;
+        return porcentajeGanadora > 50.0;
     }
 }
