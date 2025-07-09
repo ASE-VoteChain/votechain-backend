@@ -1,27 +1,30 @@
-# Etapa 1: Construcción del JAR
+# Etapa 1: Compilar el proyecto con Maven y JDK 17
 FROM maven:3.9.4-eclipse-temurin-17 AS builder
 
 WORKDIR /app
 
-# Copiar archivos necesarios para las dependencias
+# Copiar archivos necesarios
 COPY pom.xml .
-COPY .mvn .mvn
 COPY mvnw .
 COPY mvnw.cmd .
+COPY .mvn .mvn
 
-# Descargar dependencias (optimiza la cache de Docker)
+# Asegurar permisos de ejecución para mvnw (problemas comunes en Railway)
+RUN chmod +x mvnw
+
+# Descargar dependencias (esto se cachea si no cambia pom.xml)
 RUN ./mvnw dependency:go-offline -B
 
-# Copiar el código fuente
+# Copiar el resto del código fuente
 COPY src ./src
 
-# Compilar el proyecto, sin ejecutar tests
-RUN ./mvnw clean package -DskipTests -X
+# Construir el JAR sin ejecutar tests
+RUN ./mvnw clean package -DskipTests
 
 # Etapa 2: Imagen ligera para producción
 FROM eclipse-temurin:17-jre-alpine
 
-# Instalar curl para el health check
+# Instalar curl para health check
 RUN apk add --no-cache curl
 
 # Crear usuario no-root
@@ -32,21 +35,21 @@ WORKDIR /app
 # Copiar el JAR desde la etapa anterior
 COPY --from=builder /app/target/*.jar app.jar
 
-# Asignar permisos al usuario no-root
+# Asignar propiedad del JAR
 RUN chown appuser:appgroup app.jar
 
 USER appuser
 
-# Puerto por defecto de Spring Boot
+# Exponer el puerto (Spring por defecto)
 EXPOSE 8080
 
-# Variables de entorno para Spring Boot
+# Variables de entorno básicas (Railway te permite sobrescribirlas)
 ENV SPRING_PROFILES_ACTIVE=prod
 ENV SERVER_PORT=8080
 
-# Healthcheck para entornos cloud
+# Healthcheck para plataformas tipo Railway/Render
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/actuator/health || exit 1
+  CMD curl -f http://localhost:8080/actuator/health || exit 1
 
-# Comando para ejecutar la app
+# Ejecutar la app
 ENTRYPOINT ["java", "-jar", "-Dspring.profiles.active=${SPRING_PROFILES_ACTIVE}", "app.jar"]
