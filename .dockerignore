@@ -1,0 +1,53 @@
+# Archivos y directorios que no deben copiarse al contenedor Docker
+
+# Directorios de Maven
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Base de datos local
+data/
+*.db
+*.mv.db
+
+# Archivos de configuración local
+application-local.properties
+application-dev.properties
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation
+README.md
+HELP.md
+docs/
+
+# Test files
+src/test/
+
+# Node modules (si los hay)
+node_modules/
+
+# Temporary files
+*.tmp
+*.temp

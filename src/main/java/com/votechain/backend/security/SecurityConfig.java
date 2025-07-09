@@ -1,6 +1,7 @@
 package com.votechain.backend.security;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -19,7 +20,6 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
-import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -31,6 +31,9 @@ public class SecurityConfig {
 
     @Autowired
     private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:3001,http://localhost:3002,http://127.0.0.1:3000}")
+    private String[] allowedOrigins;
 
     @Bean
     public DaoAuthenticationProvider authenticationProvider() {
@@ -57,17 +60,20 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/auth/**").permitAll()          // ✅ Sin /api porque ya está en context-path
-                        .requestMatchers("/public/**").permitAll()        // ✅ Sin /api porque ya está en context-path
-                        .requestMatchers("/dashboard/public-stats").permitAll() // ✅ Sin /api porque ya está en context-path
-                        .requestMatchers("/test/**").permitAll() // Permitir acceso a endpoints de prueba
-                        .requestMatchers("/h2-console/**").permitAll() // For development only
+                        .requestMatchers("/auth/**").permitAll()
+                        .requestMatchers("/public/**").permitAll()
+                        .requestMatchers("/dashboard/public-stats").permitAll()
+                        .requestMatchers("/test/**").permitAll()
+                        .requestMatchers("/h2-console/**").permitAll()
                         .requestMatchers("/swagger-ui.html").permitAll()
                         .requestMatchers("/swagger-ui/**").permitAll()
                         .requestMatchers("/v3/api-docs/**").permitAll()
+                        .requestMatchers("/swagger-resources/**").permitAll()
+                        .requestMatchers("/webjars/**").permitAll()
+                        .requestMatchers("/actuator/health").permitAll()
+                        .requestMatchers("/actuator/info").permitAll()
                         .anyRequest().authenticated()
                 )
-                // For H2 Console
                 .headers(headers -> headers.frameOptions(frameOptions -> frameOptions.disable()));
 
         http.authenticationProvider(authenticationProvider());
@@ -80,13 +86,8 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Permitir orígenes específicos (incluyendo localhost:3000 para el frontend)
-        configuration.setAllowedOrigins(Arrays.asList(
-            "http://localhost:3000",   // Frontend principal
-            "http://localhost:3001",
-            "http://localhost:3002",
-            "http://127.0.0.1:3000"    // Alternativa con IP
-        ));
+        // Permitir orígenes desde variables de entorno
+        configuration.setAllowedOrigins(Arrays.asList(allowedOrigins));
 
         // Permitir todos los métodos HTTP necesarios
         configuration.setAllowedMethods(Arrays.asList(
